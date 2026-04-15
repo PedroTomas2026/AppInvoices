@@ -1,14 +1,52 @@
-import streamlit as st
+import re
+from io import BytesIO
+
 import pandas as pd
 import pdfplumber
-from io import BytesIO
+import streamlit as st
 
 st.set_page_config(page_title="Verificador de Faturas", layout="wide")
 st.title("Verificador de Faturas")
-st.write("Faz upload das faturas em PDF e a app vai detetar Transaction numbers repetidos entre ficheiros diferentes.")
+st.write("Carrega os PDFs e a app vai procurar Transaction numbers repetidos entre faturas diferentes.")
 
-def normalizar_coluna(nome):
-    return str(nome).strip().lower().replace("\n", " ")
+def limpar_texto(x):
+    return str(x).strip().replace("\n", " ")
+
+def extrair_por_tabela(page, filename):
+    linhas = []
+    tables = page.extract_tables()
+    for tab in tables:
+        if not tab or len(tab) < 2:
+            continue
+
+        header = [limpar_texto(c).lower() for c in tab[0]]
+        if not any("transaction" in c and "number" in c for c in header):
+            continue
+
+        try:
+            idx = next(i for i, c in enumerate(header) if "transaction" in c and "number" in c)
+        except StopIteration:
+            continue
+
+        for row in tab[1:]:
+            if idx >= len(row):
+                continue
+            trx = limpar_texto(row[idx])
+            if trx and trx.lower() != "none":
+                linhas.append({"Transaction Number": trx, "File": filename})
+    return linhas
+
+def extrair_por_texto(page, filename):
+    linhas = []
+    texto = page.extract_text() or ""
+    for line in texto.split("\n"):
+        if "transaction" in line.lower() and "number" in line.lower():
+            m = re.search(r"transaction\s*number[:\s]*([A-Za-z0-9\-_.]+)", line, re.I)
+            if m:
+                trx = m.group(1).strip()
+                if trx:
+                    linhas.append({"Transaction Number": trx, "File": filename})
+    return linhas
 
 def ler_pdf(uploaded_file):
     linhas = []
@@ -16,29 +54,9 @@ def ler_pdf(uploaded_file):
 
     with pdfplumber.open(pdf_bytes) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables()
-            for tab in tables:
-                if not tab or len(tab) < 2:
-                    continue
-
-                header = [normalizar_coluna(c) for c in tab[0]]
-                if not any("transaction number" in c for c in header):
-                    continue
-
-                try:
-                    idx_trx = next(i for i, c in enumerate(header) if "transaction number" in c)
-                except StopIteration:
-                    continue
-
-                for row in tab[1:]:
-                    if idx_trx >= len(row):
-                        continue
-                    trx = row[idx_trx]
-                    if trx is None:
-                        continue
-                    trx = str(trx).strip()
-                    if trx:
-                        linhas.append({"Transaction Number": trx, "File": uploaded_file.name})
+            linhas.extend(extrair_por_tabela(page, uploaded_file.name))
+            if not linhas:
+                linhas.extend(extrair_por_texto(page, uploaded_file.name))
 
     return pd.DataFrame(linhas)
 
@@ -59,12 +77,14 @@ if st.button("Verificar duplicados"):
                 if not df.empty:
                     todos.append(df)
                 else:
-                    st.warning(f"Não foi encontrada a coluna Transaction number em {file.name}")
+                    st.warning(f"Não consegui extrair Transaction number de {file.name}")
             except Exception as e:
                 st.error(f"Erro ao ler {file.name}: {e}")
 
         if todos:
             df_todos = pd.concat(todos, ignore_index=True)
+            df_todos["Transaction Number"] = df_todos["Transaction Number"].astype(str).str.strip()
+            df_todos = df_todos[df_todos["Transaction Number"] != ""]
 
             grouped = (
                 df_todos.groupby("Transaction Number")["File"]
