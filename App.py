@@ -1,4 +1,5 @@
 from io import BytesIO
+import re
 
 import pandas as pd
 import pdfplumber
@@ -6,52 +7,29 @@ import streamlit as st
 
 st.set_page_config(page_title="Verificador de Faturas", layout="wide")
 st.title("Verificador de Faturas")
-
 st.write("Carrega os PDFs e a app vai detetar Transaction numbers repetidos entre faturas diferentes.")
 
-def limpar_texto(x):
-    return str(x).strip().replace("\n", " ")
-
-def extrair_transacoes_pdf(uploaded_file):
-    linhas = []
+def extrair_transacoes_texto(uploaded_file):
     pdf_bytes = BytesIO(uploaded_file.read())
+    linhas = []
 
     with pdfplumber.open(pdf_bytes) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables()
-            for tab in tables:
-                if not tab or len(tab) < 2:
-                    continue
+            text = page.extract_text()
+            if not text:
+                continue
 
-                header = [limpar_texto(c).lower() for c in tab[0]]
-
-                if "transaction number" not in " ".join(header):
-                    continue
-
-                try:
-                    idx_trx = header.index("transaction number")
-                except ValueError:
-                    continue
-
-                for row in tab[1:]:
-                    if idx_trx >= len(row):
-                        continue
-
-                    trx = limpar_texto(row[idx_trx])
-
-                    if not trx:
-                        continue
-
-                    if trx.lower() in {"fulfill", "file", "transaction number"}:
-                        continue
-
-                    if not trx.isdigit():
-                        continue
-
-                    linhas.append({
-                        "Transaction Number": trx,
-                        "File": uploaded_file.name
-                    })
+            lines = text.split("\n")
+            for line in lines:
+                if "transaction number" in line.lower():
+                    nums = re.findall(r"\b\d+\b", line)
+                    if len(nums) >= 1:
+                        for n in nums:
+                            if len(n) >= 3:
+                                linhas.append({
+                                    "Transaction Number": n,
+                                    "File": uploaded_file.name
+                                })
 
     return pd.DataFrame(linhas)
 
@@ -69,7 +47,7 @@ if st.button("Verificar duplicados"):
 
         for file in uploaded_files:
             try:
-                df = extrair_transacoes_pdf(file)
+                df = extrair_transacoes_texto(file)
                 if not df.empty:
                     todos.append(df)
                 else:
