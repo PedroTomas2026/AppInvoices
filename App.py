@@ -1,122 +1,24 @@
-import re
 from io import BytesIO
 
-import pandas as pd
 import pdfplumber
 import streamlit as st
 
-st.set_page_config(page_title="Verificador de Faturas", layout="wide")
-st.title("Verificador de Faturas")
-st.write("Carrega os PDFs e a app vai detetar Transaction numbers repetidos entre faturas diferentes.")
+st.set_page_config(page_title="Debug Invoice", layout="wide")
+st.title("Debug da Invoice")
 
-def limpar_texto(x):
-    return str(x).strip().replace("\n", " ")
+uploaded_file = st.file_uploader("Carrega 1 PDF", type=["pdf"])
 
-def valor_valido(trx):
-    if trx is None:
-        return False
-    t = str(trx).strip()
-    if not t:
-        return False
-    low = t.lower()
-    if low in {"fulfill", "fulfil", "file", "transaction number"}:
-        return False
-    if len(t) < 2:
-        return False
-    return True
-
-def extrair_de_tabela(page, filename):
-    linhas = []
-    tables = page.extract_tables()
-    for tab in tables:
-        if not tab or len(tab) < 2:
-            continue
-
-        header = [limpar_texto(c).lower() for c in tab[0]]
-        idx = None
-        for i, c in enumerate(header):
-            if "transaction" in c and "number" in c:
-                idx = i
-                break
-
-        if idx is None:
-            continue
-
-        for row in tab[1:]:
-            if idx >= len(row):
-                continue
-            trx = limpar_texto(row[idx])
-            if valor_valido(trx):
-                linhas.append({"Transaction Number": trx, "File": filename})
-
-    return linhas
-
-def extrair_do_texto(page, filename):
-    linhas = []
-    texto = page.extract_text() or ""
-    for line in texto.split("\n"):
-        l = line.lower()
-        if "transaction" in l and "number" in l:
-            m = re.search(r"transaction\s*number[:\s]*([A-Za-z0-9\-_.]+)", line, re.I)
-            if m:
-                trx = m.group(1).strip()
-                if valor_valido(trx):
-                    linhas.append({"Transaction Number": trx, "File": filename})
-    return linhas
-
-def ler_pdf(uploaded_file):
-    linhas = []
+if uploaded_file:
     pdf_bytes = BytesIO(uploaded_file.read())
 
     with pdfplumber.open(pdf_bytes) as pdf:
-        for page in pdf.pages:
-            linhas.extend(extrair_de_tabela(page, uploaded_file.name))
-            if not linhas:
-                linhas.extend(extrair_do_texto(page, uploaded_file.name))
+        if len(pdf.pages) > 0:
+            page = pdf.pages[0]
+            text = page.extract_text()
 
-    return pd.DataFrame(linhas)
+            st.subheader("Texto bruto da primeira página")
+            st.text(text if text else "Sem texto extraído")
 
-uploaded_files = st.file_uploader(
-    "Carrega os PDFs das faturas",
-    type=["pdf"],
-    accept_multiple_files=True
-)
-
-if st.button("Verificar duplicados"):
-    if not uploaded_files:
-        st.warning("Carrega pelo menos um PDF.")
-    else:
-        todos = []
-        for file in uploaded_files:
-            try:
-                df = ler_pdf(file)
-                if not df.empty:
-                    todos.append(df)
-                else:
-                    st.warning(f"Não consegui extrair Transaction number de {file.name}")
-            except Exception as e:
-                st.error(f"Erro ao ler {file.name}: {e}")
-
-        if not todos:
-            st.warning("Não foi possível extrair dados válidos dos PDFs.")
-        else:
-            df_todos = pd.concat(todos, ignore_index=True)
-            df_todos["Transaction Number"] = df_todos["Transaction Number"].astype(str).str.strip()
-            df_todos = df_todos[df_todos["Transaction Number"] != ""]
-            df_todos = df_todos[~df_todos["Transaction Number"].str.lower().isin(["fulfill", "fulfil", "file", "transaction number"])]
-
-            resumo = (
-                df_todos.groupby("Transaction Number")["File"]
-                .agg(lambda x: sorted(set(x)))
-                .reset_index(name="Files")
-            )
-            resumo["num_files"] = resumo["Files"].apply(len)
-
-            duplicados = resumo[resumo["num_files"] > 1][["Transaction Number", "Files"]].copy()
-
-            if duplicados.empty:
-                st.success("OK, tudo certo sem duplicações entre faturas.")
-            else:
-                duplicados["Files"] = duplicados["Files"].apply(lambda x: ", ".join(x))
-                st.error("Foram encontradas duplicações entre faturas:")
-                st.dataframe(duplicados, use_container_width=True)
+            st.subheader("Tabela bruta da primeira página")
+            tables = page.extract_tables()
+            st.write(tables if tables else "Sem tabelas extraídas")
