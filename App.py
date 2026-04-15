@@ -19,17 +19,35 @@ def extrair_transacoes_texto(uploaded_file):
             if not text:
                 continue
 
-            lines = text.split("\n")
-            for line in lines:
-                if "transaction number" in line.lower():
-                    nums = re.findall(r"\b\d+\b", line)
-                    if len(nums) >= 1:
-                        for n in nums:
-                            if len(n) >= 3:
-                                linhas.append({
-                                    "Transaction Number": n,
-                                    "File": uploaded_file.name
-                                })
+            for line in text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+
+                nums = re.findall(r"\b\d+\b", line)
+                if len(nums) < 2:
+                    continue
+
+                if "invoice number" in line.lower() or "invoice date" in line.lower():
+                    continue
+                if "total(" in line.lower():
+                    continue
+                if "order number" in line.lower() and "transaction number" in line.lower():
+                    continue
+
+                order_number = nums[0]
+                transaction_number = nums[1]
+
+                if len(transaction_number) < 3:
+                    continue
+
+                linhas.append(
+                    {
+                        "Transaction Number": transaction_number,
+                        "Order Number": order_number,
+                        "File": uploaded_file.name,
+                    }
+                )
 
     return pd.DataFrame(linhas)
 
@@ -59,6 +77,9 @@ if st.button("Verificar duplicados"):
             st.warning("Não foi possível extrair dados válidos dos PDFs.")
         else:
             df_todos = pd.concat(todos, ignore_index=True)
+
+            df_todos["Transaction Number"] = df_todos["Transaction Number"].astype(str).str.strip()
+            df_todos["File"] = df_todos["File"].astype(str).str.strip()
 
             resumo = (
                 df_todos.groupby("Transaction Number")["File"]
