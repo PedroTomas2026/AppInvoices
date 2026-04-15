@@ -7,10 +7,22 @@ import streamlit as st
 
 st.set_page_config(page_title="Verificador de Faturas", layout="wide")
 st.title("Verificador de Faturas")
-st.write("Carrega os PDFs e a app vai procurar Transaction numbers repetidos entre faturas diferentes.")
+st.write("Carrega os PDFs e a app vai detetar Transaction numbers repetidos entre faturas diferentes.")
 
 def limpar_texto(x):
     return str(x).strip().replace("\n", " ")
+
+def eh_valor_valido(trx):
+    if not trx:
+        return False
+    t = trx.strip()
+    if not t:
+        return False
+    if t.lower() in {"fulfill", "fulfil", "file", "transaction number"}:
+        return False
+    if len(t) < 2:
+        return False
+    return True
 
 def extrair_por_tabela(page, filename):
     linhas = []
@@ -32,7 +44,7 @@ def extrair_por_tabela(page, filename):
             if idx >= len(row):
                 continue
             trx = limpar_texto(row[idx])
-            if trx and trx.lower() != "none":
+            if eh_valor_valido(trx):
                 linhas.append({"Transaction Number": trx, "File": filename})
     return linhas
 
@@ -44,7 +56,7 @@ def extrair_por_texto(page, filename):
             m = re.search(r"transaction\s*number[:\s]*([A-Za-z0-9\-_.]+)", line, re.I)
             if m:
                 trx = m.group(1).strip()
-                if trx:
+                if eh_valor_valido(trx):
                     linhas.append({"Transaction Number": trx, "File": filename})
     return linhas
 
@@ -85,20 +97,22 @@ if st.button("Verificar duplicados"):
             df_todos = pd.concat(todos, ignore_index=True)
             df_todos["Transaction Number"] = df_todos["Transaction Number"].astype(str).str.strip()
             df_todos = df_todos[df_todos["Transaction Number"] != ""]
+            df_todos = df_todos[~df_todos["Transaction Number"].str.lower().isin(["fulfill", "fulfil", "file", "transaction number"])]
 
-            grouped = (
+            resumo = (
                 df_todos.groupby("Transaction Number")["File"]
-                .agg(lambda x: sorted(set(x)))
-                .reset_index()
+                .apply(lambda x: sorted(set(x)))
+                .reset_index(name="Files")
             )
-            grouped["num_files"] = grouped["File"].str.len()
+            resumo["num_files"] = resumo["Files"].apply(len)
 
-            dup_btw = grouped[grouped["num_files"] > 1]
+            duplicados = resumo[resumo["num_files"] > 1][["Transaction Number", "Files"]].copy()
 
-            if dup_btw.empty:
+            if duplicados.empty:
                 st.success("OK, tudo certo sem duplicações entre faturas.")
             else:
                 st.error("Foram encontradas duplicações entre faturas:")
-                st.dataframe(dup_btw[["Transaction Number", "File"]], use_container_width=True)
+                duplicados["Files"] = duplicados["Files"].apply(lambda x: ", ".join(x))
+                st.dataframe(duplicados, use_container_width=True)
         else:
             st.warning("Não foi possível extrair dados válidos dos PDFs.")
